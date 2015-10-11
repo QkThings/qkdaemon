@@ -1,0 +1,15 @@
+<RCC>
+    <qresource prefix="/api">
+        <file>api/api_desc.txt</file>
+    </qresource>
+    <qresource prefix="/img">
+        <file>img/cog_grey_16.png</file>
+        <file>img/info_grey_16.png</file>
+        <file>img/message_grey_16.png</file>
+        <file>img/minus_grey_16.png</file>
+        <file>img/plus_grey_16.png</file>
+        <file>img/qkdaemon_black_24.png</file>
+        <file>img/qkthings_logo_full_black_48.png</file>
+        <file>img/reload_grey_16.png</file>
+    </qresource>
+</RCC>

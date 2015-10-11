@@ -1,0 +1,12 @@
+build/
+Makefile*
+*.pro.user*
+*.*~
+*object_script*
+*.autosave
+*~
+*.exe
+*.a
+*.so
+release/
+debug/
