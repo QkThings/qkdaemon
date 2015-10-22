@@ -7,7 +7,7 @@ from os import path, devnull
 from pigeon.logger import Logger
 from pigeon.parser import JsonParser
 
-QKCONNECT_EXE = "C:\\Users\\mribeiro\\qkthings_local\\build\\qt\\qkconnect\\release\\qkconnect.exe"
+QKCONNECT_EXE = "C:\\Users\\Mario\\qkthings_local\\build\\qt\\qkconnect\\release\\qkconnect.exe"
 
 _DEVNULL = open(devnull, 'w')
 
@@ -130,6 +130,7 @@ class QkConnect(Conn):
         self._process.terminate()
         self._set_state(Conn.StateStopped)
 
+
     def _handle_json(self, json_str):
         json_data = json.loads(json_str)
         json_keys = json_data.keys()
@@ -164,6 +165,8 @@ class QkConnect(Conn):
                     self._json_parser.parse_data(data)
 
     def send_packet(self, pkt):
+        #TODO needs a queue because it's called from client threads
+        self.log.debug("SEND PACKET: %s" % pkt)
         pkt_json_str = json.dumps(pkt)
         self._client.send(pkt_json_str)
 
