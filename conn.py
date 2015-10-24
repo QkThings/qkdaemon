@@ -3,11 +3,12 @@ import threading
 import socket
 import select
 import subprocess
+import Queue
 from os import path, devnull
 from pigeon.logger import Logger
 from pigeon.parser import JsonParser
 
-QKCONNECT_EXE = "C:\\Users\\Mario\\qkthings_local\\build\\qt\\qkconnect\\release\\qkconnect.exe"
+QKCONNECT_EXE = "C:\\Users\\mribeiro\\qkthings_local\\build\\qt\\qkconnect\\release\\qkconnect.exe"
 
 _DEVNULL = open(devnull, 'w')
 
@@ -64,14 +65,16 @@ class QkConnect(Conn):
     _nextID = 0
     _next_port = 1238
 
-    def __init__(self, port, type, params={}):
+    def __init__(self, port, type, params=[]):
         super(QkConnect, self).__init__(type, params)
         self._hostname = "localhost"
         self._port = port
         self._json_parser = JsonParser()
         self._json_parser.set_callback("parsed", self._handle_json)
         self._client = None
-        self._thread_listener = None
+        self._packets_queue = Queue.Queue()
+        self._packets_thread = None
+        self._listener_thread = None
         self._alive = False
         self._event = threading.Event()
 
@@ -92,7 +95,10 @@ class QkConnect(Conn):
     def run(self):
         self._event.clear()
         qkconnect_exe = path.normpath(QKCONNECT_EXE)
-        cmd = [qkconnect_exe, self._hostname, "%d" % self._port, self._type, "--verbose"]
+        cmd = [qkconnect_exe, self._hostname, "%d" % self._port, self._type]
+        if len(self._params):
+            cmd += self._params
+        cmd.append("--verbose")
         self.log.debug("%s CMD: %s" % (self.__class__.__name__, cmd))
         self._process = subprocess.Popen(
             cmd,
@@ -105,7 +111,7 @@ class QkConnect(Conn):
         self._process_thread.setDaemon(True)
         self._process_thread.start()
 
-        if self._event.wait(3.0) is False:
+        if self._event.wait(10.0) is False:
             self._error("Failed to create QkConnect")
             return False
 
@@ -117,24 +123,27 @@ class QkConnect(Conn):
     def _connect(self):
         self._client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._client.connect((self._hostname, self._port))
-        self._thread_listener = threading.Thread(target=self._listener)
-        self._thread_listener.setDaemon(True)
+        self._packets_thread = threading.Thread(target=self._handle_packets)
+        self._packets_thread.setDaemon(True)
+        self._listener_thread = threading.Thread(target=self._listener)
+        self._listener_thread.setDaemon(True)
         self._alive = True
-        self._thread_listener.start()
-
+        self._packets_thread.start()
+        self._listener_thread.start()
 
     def stop(self):
         self._alive = False
         self._client.close()
-        self._thread_listener.join()
+        self._packets_queue.put({"dum": "my"})
+        self._packets_thread.join()
+        self._listener_thread.join()
         self._process.terminate()
         self._set_state(Conn.StateStopped)
-
 
     def _handle_json(self, json_str):
         json_data = json.loads(json_str)
         json_keys = json_data.keys()
-        #TODO add timestamps to packets
+
         if "pkt" in json_keys:
             json_data.update({
                 "conn": {
@@ -164,11 +173,16 @@ class QkConnect(Conn):
                     data = rd.recv(256)
                     self._json_parser.parse_data(data)
 
+    def _handle_packets(self):
+        while self._alive:
+            pkt = self._packets_queue.get()
+            if "pkt" in pkt:
+                pkt_json_str = json.dumps(pkt)
+                self._client.send(pkt_json_str)
+
     def send_packet(self, pkt):
-        #TODO needs a queue because it's called from client threads
         self.log.debug("SEND PACKET: %s" % pkt)
-        pkt_json_str = json.dumps(pkt)
-        self._client.send(pkt_json_str)
+        self._packets_queue.put(pkt)
 
 class ConnFactory(object):
 

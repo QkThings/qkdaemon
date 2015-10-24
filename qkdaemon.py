@@ -60,12 +60,6 @@ class QkDaemonTCPServer(pigeon.server.TCPServer):
         super(QkDaemonTCPServer, self).__init__()
         self._qk = qk
         self._qk_clients = []
-        self._callbacks = {
-            "handle_api": None
-        }
-
-    def set_callback(self, name, cb):
-        self._callbacks[name] = cb
 
     def clients(self):
         return self._qk_clients
@@ -82,8 +76,6 @@ class QkDaemonTCPServer(pigeon.server.TCPServer):
         self._lock.acquire()
         self._qk_clients.remove(client)
         self._lock.release()
-
-
 
 
 class WebSocketHandler(tornado.websocket.WebSocketHandler):
@@ -134,16 +126,10 @@ class QkDaemonAPI(APIHandler):
 
 
     def _build_packet(self, name, params={}):
-        pkt = {}
-        if name == "search":
-            pkt.update({
-                "code": name
-            })
-        else:
-            raise Exception("unknown packet name (%s)" % name)
-
-        if params:
-            pkt.update({"params": params})
+        pkt = {
+            "code": name,
+            name: params
+        }
 
         pkt.update({"id": QkDaemonAPI._request_id()})
         return pkt
@@ -175,7 +161,6 @@ class QkDaemonAPI(APIHandler):
         return self._waiting_acks
 
     def ack(self, id):
-        print "ACK ID: %d" % id
         self._waiting_acks.remove(id)
 
     def api_qk(self):
@@ -294,10 +279,9 @@ class QkDaemon(pigeon.server.PigeonServer):
         self._api = QkDaemonAPI(apipath, self)
         self._tcp_server_thread = None
         self._tcp_server = QkDaemonTCPServer(self)
-        self._tcp_server.set_callback("handle_api", self._handle_api)
-        self._api_requests_queue = Queue.Queue()
-        self._api_requests_thread = threading.Thread(target=self._api_handler)
-        self._api_requests_thread.setDaemon(True)
+        self._packets_received_queue = Queue.Queue()
+        self._packets_received_thread = threading.Thread(target=self._handle_packets_received_from_conns)
+        self._packets_received_thread.setDaemon(True)
         self.use_prefix("qk_")
 
     def api(self):
@@ -309,18 +293,10 @@ class QkDaemon(pigeon.server.PigeonServer):
         pass
 
     def run(self, cli=False):
-        self._api_requests_thread.start()
+        self._packets_received_thread.start()
         super(QkDaemon, self).run(cli)
-        self._api_requests_thread.join()
+        self._packets_received_thread.join()
 
-    def _api_handler(self):
-        while self._request_to_quit is False:
-            req = self._api_requests_queue.get()
-            req_keys = req.keys()
-            if "method" in req_keys and \
-               "uri" in req_keys and \
-               "params" in req_keys:
-                self._api.run(req["method"], req["uri"], req["params"])
 
     def _handle_api(self, method, uri, params={}):
         req = {
@@ -329,21 +305,31 @@ class QkDaemon(pigeon.server.PigeonServer):
             "params": params
         }
         print("REQUEST: %s" % req)
-        self._api_requests_queue.put(req)
+        self._packets_received_queue.put(req)
+
+    def _handle_packets_received_from_conns(self):
+        while self._request_to_quit is False:
+            data = self._packets_received_queue.get()
+            self.log.debug("Packet from conn: %s" % json.dumps(data))
+            if "pkt" in data:
+                pkt = data["pkt"]
+                pkt_id = pkt["id"]
+                pkt_keys = pkt.keys()
+                if "ack" in pkt_keys:
+                    ack = pkt["ack"]
+                    #ack_status = ack["status"]
+                for client in self._tcp_server.clients():
+                    client_api = client.api()
+                    waiting_acks = client_api.waiting_acks()
+                    print("%s wait acks %s" % (client, waiting_acks))
+                    #TODO hw MUST send ACK according to packet ID
+                    #if pkt_id in waiting_acks:
+                    if len(waiting_acks) > 0:
+                        client_api.ack(pkt_id)
 
     def _handle_packet_received_from_conn(self, data):
-        self.log.debug("Packet from conn: %s" % data)
+        self._packets_received_queue.put(data)
         pkt = data["pkt"]
-        pkt_str = json.dumps(pkt)
-        pkt_id = pkt["id"]
-        for client in self._tcp_server.clients():
-            client_api = client.api()
-            waiting_acks = client_api.waiting_acks()
-            print("%s wait acks %s" % (client, waiting_acks))
-            if pkt_id in waiting_acks:
-                client_api.ack(pkt_id)
-
-        self._tcp_server.send_to_all(pkt_str + "\r\n")
 
     def find_conn(self, conn_id):
         return self._conn_factory.find(conn_id)
@@ -392,8 +378,8 @@ class QkDaemon(pigeon.server.PigeonServer):
 
     def qk_quit(self):
         super(QkDaemon, self).pgn_quit()
-        self._api_requests_queue.put({"dum": "my"})
-        self._api_requests_thread.join()
+        self._packets_received_queue.put({"dum": "my"})
+        self._packets_received_thread.join()
         self.stop_tcp_server()
 
 
